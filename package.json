@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "heic-to": "^1.6.7",
     "onnxruntime-web": "^1.31.1",
     "vue": "^3.5.45"
   },

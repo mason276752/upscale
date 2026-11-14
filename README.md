@@ -9,6 +9,7 @@
 - **AI 放大**：SPAN 超解析度模型，4×（通用照片／插畫，耐得住 JPEG 雜訊）或 2×（輸出檔小很多）
 - **前後對照**：拖曳分隔線比較原圖與結果，可切換 1:1 看細節
 - **批次處理**：一次放很多張（選檔、拖曳、貼上都可以），依序放大
+- **iPhone 的 HEIC／HEIF 照片**：Safari 直接解碼；其他瀏覽器遇到時才載入 HEIF 解碼器（約 800 KB，只下載一次），同樣在本機運算
 - **輸出**：PNG（無損）、JPG、WebP；透明 PNG 的 alpha 另外平滑放大後保留
 - **WebGPU 加速**：有 WebGPU 的瀏覽器用顯示卡，沒有就退回 CPU（WASM），大圖會比較慢
 
@@ -50,3 +51,4 @@ npm run build      # 輸出到 dist/
 
 - 模型權重：[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)，作者 Philip Hofmann（頁尾有標註）
 - [onnxruntime-web](https://github.com/microsoft/onnxruntime)（MIT）、[Vue](https://vuejs.org/)（MIT）
+- [heic-to](https://github.com/hoppergee/heic-to)（內含 [libheif](https://github.com/strukturag/libheif)，LGPL-3.0）：未修改，打包成獨立的檔案，只在瀏覽器無法原生解碼 HEIF 時載入；授權全文隨網站發布在 `heic-to.LICENSE`

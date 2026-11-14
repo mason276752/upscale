@@ -4,6 +4,7 @@
 //     用 tools/export-onnx.py 轉成 ONNX、與 PyTorch 逐像素比對過
 //   * 推論：onnxruntime-web，在 Web Worker 裡分塊跑（見 upscale/）
 //   * 串接：ZIP 編輯器可以把圖片傳過來，結果打包成 ZIP 傳回去（見 bridge.js）
+//   * HEIC／HEIF：瀏覽器解不開的先轉成 PNG（見 heif.js）
 import { computed, markRaw, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from './components/Icon.vue'
 import CompareView from './components/CompareView.vue'
@@ -11,6 +12,7 @@ import { bridgeSupported, listen, sendToEditor } from './bridge.js'
 import { makeZip } from './zip.js'
 import { fmtBytes, saveBlob, timeStamp, uniqueName } from './util.js'
 import { EXT, applyScaledAlpha, decodeImage, encodePixels, reencode } from './image.js'
+import { ensureDecodable } from './heif.js'
 import { sizeProblem } from './upscale/tiles.js'
 import { cancelAll, detectBackend, upscalePixels } from './upscale/index.js'
 
@@ -51,7 +53,7 @@ const selected = computed(() => items.value.find((i) => i.id === selectedId.valu
 const doneItems = computed(() => items.value.filter((i) => i.status === 'done'))
 const fileInput = ref(null)
 
-const isImage = (f) => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif|svg|ico)$/i.test(f.name)
+const isImage = (f) => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif|svg|ico|heic|heif|hif)$/i.test(f.name)
 
 function addFiles(list, from) {
   const files = [...list]
@@ -78,7 +80,29 @@ function addFiles(list, from) {
   const skipped = files.length - images.length
   const who = from === 'zipeditor' ? '從 ZIP 編輯器收到' : '已加入'
   toast(`${who} ${images.length} 張圖片${skipped ? `（略過 ${skipped} 個不是圖片的）` : ''}`)
+  for (const item of items.value.slice(-added.length)) prepare(item)
   pump()
+}
+
+// 瀏覽器解不開的 HEIF 一加入就依序轉成 PNG，不等放大的佇列：縮圖早點出來，
+// 之後的解碼、前後對照都用轉好的檔。
+const prepared = new Map() // id → Promise
+let preparing = Promise.resolve()
+function prepare(item) {
+  let p = prepared.get(item.id)
+  if (!p) {
+    p = preparing.then(async () => {
+      if (!items.value.includes(item)) return
+      const file = await ensureDecodable(item.file)
+      if (file === item.file || !items.value.includes(item)) return
+      URL.revokeObjectURL(item.srcUrl)
+      item.file = markRaw(file)
+      item.srcUrl = URL.createObjectURL(file)
+    })
+    preparing = p.catch(() => prepared.delete(item.id)) // 失敗了（例如解碼器沒載到），重試時再轉一次
+    prepared.set(item.id, p)
+  }
+  return p
 }
 
 function dropResult(item) {
@@ -92,6 +116,7 @@ function removeItem(item) {
   }
   dropResult(item)
   URL.revokeObjectURL(item.srcUrl)
+  prepared.delete(item.id)
   const i = items.value.indexOf(item)
   items.value.splice(i, 1)
   if (selectedId.value === item.id) selectedId.value = items.value[Math.min(i, items.value.length - 1)]?.id ?? null
@@ -129,6 +154,7 @@ async function process(item) {
   item.progress = 0
   item.error = ''
   try {
+    await prepare(item)
     const src = await decodeImage(item.file)
     item.width = src.width
     item.height = src.height
@@ -423,7 +449,7 @@ onBeforeUnmount(() => {
       <span>{{ toastMsg }}</span>
     </div>
 
-    <input ref="fileInput" type="file" accept="image/*" multiple hidden @change="onPick" />
+    <input ref="fileInput" type="file" accept="image/*,.heic,.heif" multiple hidden @change="onPick" />
   </div>
 </template>
 

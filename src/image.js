@@ -12,7 +12,7 @@ async function load(file) {
       await img.decode()
       return img
     } catch {
-      throw new Error('瀏覽器解不開這個格式（HEIC 請先用 Paste → JPG 轉檔）')
+      throw new Error('瀏覽器解不開這個格式')
     } finally {
       URL.revokeObjectURL(url)
     }
