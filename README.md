@@ -18,7 +18,7 @@
 工具都放在 `mason276752.github.io` 底下，屬於同一個 origin，可以用 [BroadcastChannel](https://developer.mozilla.org/docs/Web/API/BroadcastChannel) 互傳檔案：
 
 - 在 [ZIP 編輯器](https://mason276752.github.io/zipeditor/) 勾選圖片（或在預覽裡）按「圖片放大」，檔案會傳過來（`{type:'files'}`）
-- 從 ZIP 編輯器（或經過其他工具轉來）的檔案記得來源：放大好、之後換輸出格式，結果都會自動傳回（`{type:'update'}`），放在 ZIP 裡原檔旁邊；同一份結果的新版本會取代舊的（同一份結果連續修改時會防抖、節流：停手 0.8 秒才傳最新版，一直改也至少每 3 秒傳一次）
+- 從 ZIP 編輯器（或經過其他工具轉來）的檔案記得來源：放大好、之後換輸出格式，結果都會自動傳回（`{type:'update'}`），直接覆蓋 ZIP 裡的原檔，副檔名不同時一併改名（例如 photo.png → photo.jpg）（同一份結果連續修改時會防抖、節流：停手 0.8 秒才傳最新版，一直改也至少每 3 秒傳一次）
 - 這裡按「傳到 ZIP 編輯器」，把全部結果打包成 ZIP 傳過去（`{type:'zip'}`），可以合併到目前的資料夾（自己加進來的檔案用這個）
 - 按「傳到去背」，放大後的圖直接交給[去背](https://mason276752.github.io/removebg/)（`{type:'files'}`），不必繞經 ZIP 編輯器；去背那邊也能把結果傳過來放大
 
