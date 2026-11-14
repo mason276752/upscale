@@ -3,12 +3,12 @@
 //   * 模型：rust-ai-webtool 用的同一組權重（Phips 的 NomosUni SPAN，CC-BY-4.0），
 //     用 tools/export-onnx.py 轉成 ONNX、與 PyTorch 逐像素比對過
 //   * 推論：onnxruntime-web，在 Web Worker 裡分塊跑（見 upscale/）
-//   * 串接：ZIP 編輯器可以把圖片傳過來，結果打包成 ZIP 傳回去（見 bridge.js）
+//   * 串接：ZIP 編輯器可以把圖片傳過來，結果打包成 ZIP 傳回去；也能直接傳到去背（見 bridge.js）
 //   * HEIC／HEIF：瀏覽器解不開的先轉成 PNG（見 heif.js）
 import { computed, markRaw, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from './components/Icon.vue'
 import CompareView from './components/CompareView.vue'
-import { bridgeSupported, listen, sendToEditor } from './bridge.js'
+import { bridgeSupported, listen, sendFiles, sendToEditor, toolLabel } from './bridge.js'
 import { makeZip } from './zip.js'
 import { fmtBytes, saveBlob, timeStamp, uniqueName } from './util.js'
 import { EXT, applyScaledAlpha, decodeImage, encodePixels, reencode } from './image.js'
@@ -78,7 +78,7 @@ function addFiles(list, from) {
   items.value.push(...added)
   if (!selected.value) selectedId.value = added[0].id
   const skipped = files.length - images.length
-  const who = from === 'zipeditor' ? '從 ZIP 編輯器收到' : '已加入'
+  const who = from ? `從${toolLabel(from)}收到` : '已加入'
   toast(`${who} ${images.length} 張圖片${skipped ? `（略過 ${skipped} 個不是圖片的）` : ''}`)
   for (const item of items.value.slice(-added.length)) prepare(item)
   pump()
@@ -248,6 +248,13 @@ async function downloadAll() {
 }
 
 const sending = ref(false)
+function reportSend(res, name, count) {
+  const label = toolLabel(name)
+  if (res === 'sent') toast(`已把 ${count} 張圖片傳到${label}`)
+  else if (res === 'blocked') toast(`瀏覽器擋下了新分頁，請先開啟${label}再傳送`)
+  else toast(`${label}沒有回應，請再試一次`)
+}
+
 async function sendAll() {
   if (sending.value || !doneItems.value.length) return
   sending.value = true
@@ -255,9 +262,17 @@ async function sendAll() {
   // 同步呼叫：ZIP 編輯器沒開的話要在這次點擊裡開新分頁。
   const res = await sendToEditor(async () => new File([await makeZip(list)], zipName(), { type: 'application/zip' }))
   sending.value = false
-  if (res === 'sent') toast(`已把 ${list.length} 張圖片傳到 ZIP 編輯器`)
-  else if (res === 'blocked') toast('瀏覽器擋下了新分頁，請先開啟 ZIP 編輯器再傳送')
-  else toast('ZIP 編輯器沒有回應，請再試一次')
+  reportSend(res, 'zipeditor', list.length)
+}
+
+/** 結果直接交給另一個工具（例如放大後去背），不經過 ZIP 編輯器。 */
+async function sendTo(name) {
+  if (sending.value || !doneItems.value.length) return
+  sending.value = true
+  const list = zipList()
+  const res = await sendFiles(name, async () => list.map((f) => new File([f.blob], f.name, { type: f.blob.type })))
+  sending.value = false
+  reportSend(res, name, list.length)
 }
 
 const statusText = (i) =>
@@ -365,7 +380,7 @@ onBeforeUnmount(() => {
       <section class="start panel">
         <Icon name="image" class="hero" />
         <strong>把圖片拖進來、貼上，或選擇檔案</strong>
-        <span>PNG、JPG、WebP、AVIF、GIF……一次可以放很多張，放進來就開始放大</span>
+        <span>PNG、JPG、WebP、HEIC、AVIF、GIF……一次可以放很多張，放進來就開始放大</span>
         <div class="start-btns">
           <button type="button" class="btn primary" @click="pick"><Icon name="upload" />選擇圖片</button>
         </div>
@@ -376,8 +391,8 @@ onBeforeUnmount(() => {
         <ul>
           <li><strong>AI 放大</strong>：用 SPAN 超解析度模型把圖片放大 4 倍或 2 倍，邊緣與紋理比一般縮放清楚，對網路上抓來、壓縮過的 JPG 也耐得住。</li>
           <li><strong>前後對照</strong>：拖曳分隔線比較原圖與結果，可切換 1:1 看細節。</li>
-          <li><strong>批次處理</strong>：一次放很多張，依序放大；透明背景的 PNG 會保留透明。</li>
-          <li><strong>串接 ZIP 編輯器</strong>：在 <a href="../zipeditor/">ZIP 編輯器</a>勾選圖片就能傳過來，放大後再按「傳到 ZIP 編輯器」放回去。</li>
+          <li><strong>批次處理</strong>：一次放很多張，依序放大；透明背景的 PNG 會保留透明。iPhone 的 HEIC 照片也能直接放。</li>
+          <li><strong>串接其他工具</strong>：在 <a href="../zipeditor/">ZIP 編輯器</a>勾選圖片就能傳過來，放大後再按「傳到 ZIP 編輯器」放回去；也可以按「傳到去背」直接交給<a href="../removebg/">去背</a>。</li>
           <li><strong>不上傳</strong>：模型只有 1.7MB，下載到瀏覽器裡執行。有 WebGPU 的瀏覽器（Chrome、Edge、新版 Safari）用顯示卡加速，其他用 CPU，大圖會比較慢。</li>
         </ul>
       </section>
@@ -415,6 +430,10 @@ onBeforeUnmount(() => {
         <div class="actions">
           <span class="grow muted">{{ doneItems.length }} / {{ items.length }} 張完成</span>
           <button v-if="doneItems.length > 1" type="button" class="btn" @click="downloadAll"><Icon name="download" />打包下載</button>
+          <button v-if="bridgeSupported" type="button" class="btn" :disabled="sending || !doneItems.length"
+                  title="放大後的圖直接拿去去背" @click="sendTo('removebg')">
+            <Icon name="send" />傳到去背
+          </button>
           <button v-if="bridgeSupported" type="button" class="btn primary" :disabled="sending || !doneItems.length" @click="sendAll">
             <Icon name="send" />傳到 ZIP 編輯器
           </button>

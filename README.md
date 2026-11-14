@@ -13,12 +13,13 @@
 - **輸出**：PNG（無損）、JPG、WebP；透明 PNG 的 alpha 另外平滑放大後保留
 - **WebGPU 加速**：有 WebGPU 的瀏覽器用顯示卡，沒有就退回 CPU（WASM），大圖會比較慢
 
-## 和 ZIP 編輯器串接
+## 和其他工具串接
 
 工具都放在 `mason276752.github.io` 底下，屬於同一個 origin，可以用 [BroadcastChannel](https://developer.mozilla.org/docs/Web/API/BroadcastChannel) 互傳檔案：
 
 - 在 [ZIP 編輯器](https://mason276752.github.io/zipeditor/) 勾選圖片（或在預覽裡）按「圖片放大」，檔案會傳過來（`{type:'files'}`）
 - 這裡按「傳到 ZIP 編輯器」，結果打包成 ZIP 傳回去（`{type:'zip'}`），可以合併到目前的資料夾
+- 按「傳到去背」，放大後的圖直接交給[去背](https://mason276752.github.io/removebg/)（`{type:'files'}`），不必繞經 ZIP 編輯器；去背那邊也能把結果傳過來放大
 
 對方的分頁沒開的話會自動開新分頁。協定見 [`src/bridge.js`](src/bridge.js)，與 zipeditor、paste2jpg 相同。
 
