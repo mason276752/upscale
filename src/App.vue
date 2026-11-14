@@ -3,12 +3,12 @@
 //   * 模型：rust-ai-webtool 用的同一組權重（Phips 的 NomosUni SPAN，CC-BY-4.0），
 //     用 tools/export-onnx.py 轉成 ONNX、與 PyTorch 逐像素比對過
 //   * 推論：onnxruntime-web，在 Web Worker 裡分塊跑（見 upscale/）
-//   * 串接：ZIP 編輯器可以把圖片傳過來，結果打包成 ZIP 傳回去；也能直接傳到去背（見 bridge.js）
+//   * 串接：別的工具傳來的圖，放大好、之後每次改變都自動傳回來源；也能直接傳到去背（見 bridge.js）
 //   * HEIC／HEIF：瀏覽器解不開的先轉成 PNG（見 heif.js）
 import { computed, markRaw, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from './components/Icon.vue'
 import CompareView from './components/CompareView.vue'
-import { bridgeSupported, listen, sendFiles, sendToEditor, toolLabel } from './bridge.js'
+import { bridgeSupported, listen, sendFiles, sendResult, sendToEditor, toolLabel } from './bridge.js'
 import { makeZip } from './zip.js'
 import { fmtBytes, saveBlob, timeStamp, uniqueName } from './util.js'
 import { EXT, applyScaledAlpha, decodeImage, encodePixels, reencode } from './image.js'
@@ -55,16 +55,20 @@ const fileInput = ref(null)
 
 const isImage = (f) => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif|svg|ico|heic|heif|hif)$/i.test(f.name)
 
-function addFiles(list, from) {
+// origins[i]：files[i] 從哪個工具來（見 bridge.js），放大的結果會自動傳回去。
+function addFiles(list, from, origins = []) {
   const files = [...list]
-  const images = files.filter(isImage)
+  const picked = files.map((f, i) => [f, origins[i] ?? null]).filter(([f]) => isImage(f))
+  const images = picked.map(([f]) => f)
   if (!images.length) {
     if (files.length) toast('沒有可以處理的圖片')
     return
   }
-  const added = images.map((f) => ({
+  const added = picked.map(([f, origin]) => ({
     id: crypto.randomUUID(),
     file: markRaw(f),
+    origin: origin && markRaw(origin), // 不要變成 Proxy：轉傳給別的工具時要能 postMessage
+    returned: '', // '' | 'ok' | 'failed'
     name: f.name || 'image.png',
     srcUrl: URL.createObjectURL(f),
     width: 0,
@@ -79,7 +83,8 @@ function addFiles(list, from) {
   if (!selected.value) selectedId.value = added[0].id
   const skipped = files.length - images.length
   const who = from ? `從${toolLabel(from)}收到` : '已加入'
-  toast(`${who} ${images.length} 張圖片${skipped ? `（略過 ${skipped} 個不是圖片的）` : ''}`)
+  const back = picked.find(([, o]) => o)?.[1]
+  toast(`${who} ${images.length} 張圖片${skipped ? `（略過 ${skipped} 個不是圖片的）` : ''}${back ? `，放大好會自動傳回${toolLabel(back.app)}` : ''}`)
   for (const item of items.value.slice(-added.length)) prepare(item)
   pump()
 }
@@ -153,6 +158,7 @@ async function process(item) {
   item.status = 'running'
   item.progress = 0
   item.error = ''
+  item.returned = ''
   try {
     await prepare(item)
     const src = await decodeImage(item.file)
@@ -186,6 +192,7 @@ async function process(item) {
     dropResult(item)
     item.result = { blob: markRaw(blob), url: URL.createObjectURL(blob), width: out.width, height: out.height, scale: s }
     item.status = 'done'
+    returnResult(item)
   } catch (err) {
     if (item.run !== run || !items.value.includes(item)) return
     item.status = 'error'
@@ -219,6 +226,7 @@ watch(format, async (type) => {
       if (item.result !== old || format.value !== type) continue
       URL.revokeObjectURL(old.url)
       item.result = { ...old, blob: markRaw(blob), url: URL.createObjectURL(blob) }
+      returnResult(item)
     } catch (err) {
       toast(`${item.name}：${err.message}`)
     }
@@ -265,20 +273,37 @@ async function sendAll() {
   reportSend(res, 'zipeditor', list.length)
 }
 
-/** 結果直接交給另一個工具（例如放大後去背），不經過 ZIP 編輯器。 */
+/** 結果直接交給另一個工具（例如放大後去背），不經過 ZIP 編輯器。圖原本的來源跟著傳過去，那邊的結果也會回到那裡。 */
 async function sendTo(name) {
   if (sending.value || !doneItems.value.length) return
   sending.value = true
   const list = zipList()
-  const res = await sendFiles(name, async () => list.map((f) => new File([f.blob], f.name, { type: f.blob.type })))
+  const origins = doneItems.value.map((i) => i.origin)
+  const res = await sendFiles(name, async () => ({
+    files: list.map((f) => new File([f.blob], f.name, { type: f.blob.type })),
+    origins,
+  }))
   sending.value = false
   reportSend(res, name, list.length)
 }
 
+/** 從別的工具來的圖：每次有新結果（放大好、換輸出格式）就傳回來源。 */
+async function returnResult(item) {
+  if (!item.origin || !item.result) return
+  const { blob } = item.result
+  const ok = await sendResult(item.origin, item.id, new File([blob], outName(item), { type: blob.type }))
+  if (item.result?.blob === blob) item.returned = ok ? 'ok' : 'failed'
+}
+
+const returnNote = (i) =>
+  !i.origin || !i.returned ? ''
+    : i.returned === 'ok' ? ` · 已傳回${toolLabel(i.origin.app)}`
+      : ` · ${toolLabel(i.origin.app)}已關閉，沒傳回`
+
 const statusText = (i) =>
   i.status === 'queued' ? '等待中'
     : i.status === 'running' ? `放大中 ${Math.round(i.progress * 100)}%`
-      : i.status === 'done' ? `${i.result.width}×${i.result.height} · ${fmtBytes(i.result.blob.size)}`
+      : i.status === 'done' ? `${i.result.width}×${i.result.height} · ${fmtBytes(i.result.blob.size)}${returnNote(i)}`
         : i.error
 
 // ---------- 輸入：選檔、拖放、貼上 ----------
@@ -332,7 +357,7 @@ onMounted(async () => {
   window.addEventListener('dragover', onDragOver)
   window.addEventListener('dragleave', onDragLeave)
   window.addEventListener('drop', onDrop)
-  stopListening = listen((files, from) => addFiles(files, from || 'zipeditor'))
+  stopListening = listen((files, from, origins) => addFiles(files, from || 'zipeditor', origins))
   backend.value = await detectBackend()
   pump()
 })
